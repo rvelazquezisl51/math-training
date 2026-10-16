@@ -1,37 +1,29 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // REPLACE UID ONLY AFTER TESTING. Default denies everyone.
-    function isTeacher() {
-      return request.auth != null && request.auth.uid == 'REPLACE_WITH_TEACHER_UID';
-    }
+    // Sustituir por el UID real del maestro, nunca por un correo.
+    function isTeacher() { return request.auth != null && request.auth.uid == 'REPLACE_WITH_TEACHER_UID'; }
     match /teacherEvidence/{recordId} {
+      allow read, create: if isTeacher();
+      allow update, delete: if false;
+    }
+    match /studentSessions/{recordId} {
       allow read: if isTeacher();
-      allow create: if isTeacher()
-        && request.resource.data.keys().hasOnly(['date','block','skill','disposition','attempts','helps','firstAttempt','correct','standard','seconds','source','createdAt'])
-        && request.resource.data.date is string
-        && request.resource.data.date.size() <= 40
-        && request.resource.data.block is int
-        && request.resource.data.block >= 1
-        && request.resource.data.block <= 7
-        && request.resource.data.skill is string
-        && request.resource.data.skill.size() <= 100
-        && request.resource.data.disposition is string
-        && request.resource.data.disposition.size() <= 50
-        && request.resource.data.attempts is int
-        && request.resource.data.attempts >= 0
-        && request.resource.data.attempts <= 100
-        && request.resource.data.helps is int
-        && request.resource.data.helps >= 0
-        && request.resource.data.helps <= 100
-        && request.resource.data.firstAttempt is bool
-        && request.resource.data.correct is bool
-        && request.resource.data.standard is string
-        && request.resource.data.standard.size() <= 150
-        && request.resource.data.seconds is int
-        && request.resource.data.seconds >= 0
-        && request.resource.data.seconds <= 86400
-        && request.resource.data.source == 'teacher-import'
+      allow create: if request.auth != null
+        && request.auth.token.firebase.sign_in_provider == 'anonymous'
+        && request.resource.data.keys().hasAll(['ownerUid','block','mode','total','correct','firstAttempt','omitted','attempts','helps','seconds','source','createdAt'])
+        && request.resource.data.keys().hasOnly(['ownerUid','block','mode','total','correct','firstAttempt','omitted','attempts','helps','seconds','source','createdAt'])
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.block is int && request.resource.data.block >= 1 && request.resource.data.block <= 7
+        && request.resource.data.mode in ['solo','guided']
+        && request.resource.data.total is int && request.resource.data.total >= 1 && request.resource.data.total <= 80
+        && request.resource.data.correct is int && request.resource.data.correct >= 0 && request.resource.data.correct <= request.resource.data.total
+        && request.resource.data.firstAttempt is int && request.resource.data.firstAttempt >= 0 && request.resource.data.firstAttempt <= request.resource.data.correct
+        && request.resource.data.omitted is int && request.resource.data.omitted >= 0 && request.resource.data.omitted <= request.resource.data.total
+        && request.resource.data.attempts is int && request.resource.data.attempts >= 0 && request.resource.data.attempts <= 8000
+        && request.resource.data.helps is int && request.resource.data.helps >= 0 && request.resource.data.helps <= 8000
+        && request.resource.data.seconds is int && request.resource.data.seconds >= 0 && request.resource.data.seconds <= 86400
+        && request.resource.data.source == 'student-auto'
         && request.resource.data.createdAt == request.time;
       allow update, delete: if false;
     }
