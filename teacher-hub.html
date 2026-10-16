@@ -3,11 +3,12 @@
 </style></head><body><main><section><h1>Teacher Hub RVA</h1><p class="muted">Math Training RVA · Visor de evidencias y sincronización docente controlada</p><p class="warn">No importes información identificable de estudiantes sin autorización institucional. La sincronización solo admite registros pedagógicos limitados, sin nombres ni respuestas individuales.</p><button id="login">Entrar con Google</button><button id="logout" disabled>Salir</button><p id="auth">Sin iniciar sesión.</p><p class="muted">Identificador de usuario para configurar las reglas: <code id="uid">—</code></p></section>
 <section><h2>Evidencias locales</h2><p>Importa un JSON exportado desde Math Training. Se procesa localmente antes de decidir si se guarda en Firestore.</p><input id="file" type="file" accept=".json,application/json"><button id="clear">Limpiar</button><p id="status" role="status">Sin archivo cargado.</p><div id="summary">—</div><button id="sync" disabled>Guardar registros depurados en Firestore</button><button id="load" disabled>Consultar registros guardados</button></section>
 <section><h2>Sesiones automáticas (sin nombres)</h2><p class="muted">Se muestran totales anónimos por sesión. No permite identificar a estudiantes individuales.</p><button id="loadAuto" disabled>Consultar sesiones automáticas</button><p id="autoStatus" role="status">Sin consultar.</p><div class="scroll"><table><thead><tr><th>Fecha</th><th>Bloque</th><th>Modo</th><th>Actividades</th><th>Correctas</th><th>Primer intento</th><th>Omitidas</th><th>Ayudas</th><th>Tiempo (s)</th></tr></thead><tbody id="autoRows"></tbody></table></div></section>
+<section><h2>Diagnóstico de acceso docente</h2><p class="muted">Prueba de lectura directa, sin cambiar las reglas ni escribir datos.</p><button id="diagnose" disabled>Verificar acceso a Firestore</button><p id="diagnostic" role="status">Sin verificar.</p></section>
 <section><h2>Resultados</h2><div class="scroll"><table><thead><tr><th>Fecha</th><th>Bloque</th><th>Habilidad</th><th>Resultado</th><th>Intentos</th><th>Ayudas</th><th>Primera respuesta</th></tr></thead><tbody id="rows"></tbody></table></div></section><footer><small>© 2026 Rene M. Velazquez Avila · Math Training RVA · Todos los derechos reservados.</small></footer></main>
 <script type="module">
 import {initializeApp} from 'https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js';
 import {getAuth,GoogleAuthProvider,signInWithPopup,signOut,onAuthStateChanged} from 'https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js';
-import {getFirestore,collection,addDoc,getDocs,query,orderBy,limit,serverTimestamp} from 'https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js';
+import {getFirestore,collection,addDoc,getDocs,query,orderBy,limit,serverTimestamp,getDoc,doc} from 'https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js';
 import {firebaseConfig} from './firebase-config.js';
 const app=initializeApp(firebaseConfig),auth=getAuth(app),db=getFirestore(app),el=id=>document.getElementById(id);
 const esc=v=>String(v??'—').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -19,10 +20,23 @@ el('file').onchange=async e=>{try{const f=e.target.files[0];if(!f)return;if(f.si
 el('clear').onclick=()=>{records=[];el('file').value='';el('rows').textContent='';el('summary').textContent='—';el('sync').disabled=true;status('Vista limpia.')};
 el('login').onclick=async()=>{try{await signInWithPopup(auth,new GoogleAuthProvider())}catch(e){status('No se pudo iniciar sesión: '+e.message)}};
 el('logout').onclick=()=>signOut(auth).catch(e=>status(e.message));
-onAuthStateChanged(auth,u=>{el('auth').textContent=u?'Conectado: '+u.email:'Sin iniciar sesión.';el('uid').textContent=u?u.uid:'—';el('login').disabled=!!u;el('logout').disabled=!u;el('sync').disabled=!u||!records.length;el('load').disabled=!u;el('loadAuto').disabled=!u});
+onAuthStateChanged(auth,u=>{el('auth').textContent=u?'Conectado: '+u.email:'Sin iniciar sesión.';el('uid').textContent=u?u.uid:'—';el('login').disabled=!!u;el('logout').disabled=!u;el('sync').disabled=!u||!records.length;el('load').disabled=!u;el('loadAuto').disabled=!u;el('diagnose').disabled=!u});
 el('sync').onclick=async()=>{if(!auth.currentUser||!records.length)return;if(!confirm(`¿Guardar ${records.length} registros depurados en Firestore? Solo datos de prueba o autorizados.`))return;el('sync').disabled=true;let done=0;try{for(const r of records){await addDoc(collection(db,'teacherEvidence'),{...r,createdAt:serverTimestamp()});done++}status(`${done} registros guardados correctamente en Firestore.`)}catch(e){status(`${done} guardados; error: ${e.message}. No reintentes sin revisar posibles duplicados.`)}finally{el('sync').disabled=false}};
 el('load').onclick=async()=>{try{const snap=await getDocs(query(collection(db,'teacherEvidence'),orderBy('createdAt','desc'),limit(300)));const a=snap.docs.map(d=>d.data());display(a);status(`${a.length} registros consultados desde Firestore (máximo 300).`)}catch(e){status('No se pudieron consultar registros: '+e.message+'\nComprueba que tu UID esté autorizado en las reglas publicadas.')}};
 
+el('diagnose').onclick=async()=>{
+ const out=el('diagnostic');out.textContent='Verificando...';
+ const u=auth.currentUser;
+ if(!u){out.textContent='No hay sesión de Google.';return}
+ const lines=[`Proyecto: ${app.options.projectId}`,`Proveedor: ${u.providerData.map(p=>p.providerId).join(', ')||'—'}`,`UID: ${u.uid}`];
+ try {await u.getIdToken(true);lines.push('Token actualizado: sí')}catch(e){lines.push(`Token: ${e.code||e.message}`)}
+ for(const [label,fn] of [
+  ['Lectura simple studentSessions',()=>getDocs(query(collection(db,'studentSessions'),limit(1)))],
+  ['Lectura ordenada studentSessions',()=>getDocs(query(collection(db,'studentSessions'),orderBy('createdAt','desc'),limit(1)))],
+  ['Lectura simple teacherEvidence',()=>getDocs(query(collection(db,'teacherEvidence'),limit(1)))],
+ ]){try{const r=await fn();lines.push(`${label}: OK (${r.size} registros)`)}catch(e){lines.push(`${label}: ${e.code||'error'} — ${e.message}`)}}
+ out.textContent=lines.join('\n');
+};
 el('loadAuto').onclick=async()=>{try{
  const snap=await getDocs(query(collection(db,'studentSessions'),orderBy('createdAt','desc'),limit(300)));
  el('autoRows').innerHTML=snap.docs.map(d=>{const r=d.data();const date=r.createdAt?.toDate?.()?.toLocaleString('es-US')||'—';return `<tr><td>${esc(date)}</td><td>${esc(r.block)}</td><td>${esc(r.mode)}</td><td>${esc(r.total)}</td><td>${esc(r.correct)}</td><td>${esc(r.firstAttempt)}</td><td>${esc(r.omitted)}</td><td>${esc(r.helps)}</td><td>${esc(r.seconds)}</td></tr>`}).join('');
