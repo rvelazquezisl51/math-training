@@ -1,19 +1,49 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Sustituir por el UID real del maestro, nunca por un correo.
+    // Sustituye el marcador por el UID real del docente antes de publicar.
     function isTeacher() { return request.auth != null && request.auth.uid == 'REPLACE_WITH_TEACHER_UID'; }
+    function isAnonymous() { return request.auth != null && request.auth.token.firebase.sign_in_provider == 'anonymous'; }
+    function validCode(c) { return c in ['YA01','WI02','AD03','EV04','MI05','HA06','AU07','AX08','RM09','RA10','AS11','ST12','LU13','NO14','CH15','LA16','CO17','AM18','BE19']; }
+    function leaseFields() { return ['ownerUid','sessionId','expiresAt','updatedAt']; }
+    function leaseShape() {
+      return request.resource.data.keys().hasAll(leaseFields())
+        && request.resource.data.keys().hasOnly(leaseFields())
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.sessionId is string
+        && request.resource.data.sessionId.size() >= 16 && request.resource.data.sessionId.size() <= 80
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time
+        && request.resource.data.expiresAt < request.time + duration.value(6,'m')
+        && request.resource.data.updatedAt == request.time;
+    }
+    match /activeCodes/{code} {
+      // Lectura individual del estado de ocupación; no permite enumerar la clase.
+      allow get: if isTeacher() || (isAnonymous() && validCode(code));
+      allow list: if isTeacher();
+      allow create: if isAnonymous() && validCode(code) && leaseShape();
+      allow update: if isAnonymous() && validCode(code) && leaseShape() && (
+        (resource.data.ownerUid == request.auth.uid && resource.data.sessionId == request.resource.data.sessionId)
+        || resource.data.expiresAt <= request.time
+      );
+      allow delete: if isTeacher() || (isAnonymous() && resource.data.ownerUid == request.auth.uid);
+    }
     match /teacherEvidence/{recordId} {
       allow read, create: if isTeacher();
       allow update, delete: if false;
     }
     match /studentSessions/{recordId} {
-      allow read: if isTeacher();
-      allow create: if request.auth != null
-        && request.auth.token.firebase.sign_in_provider == 'anonymous'
-        && request.resource.data.keys().hasAll(['ownerUid','block','mode','total','correct','firstAttempt','omitted','attempts','helps','seconds','source','createdAt'])
-        && request.resource.data.keys().hasOnly(['ownerUid','block','mode','total','correct','firstAttempt','omitted','attempts','helps','seconds','source','createdAt'])
+      allow read, delete: if isTeacher();
+      allow create: if isAnonymous()
+        && request.resource.data.keys().hasAll(['ownerUid','studentCode','sessionId','block','mode','total','correct','firstAttempt','omitted','attempts','helps','seconds','source','createdAt'])
+        && request.resource.data.keys().hasOnly(['ownerUid','studentCode','sessionId','block','mode','total','correct','firstAttempt','omitted','attempts','helps','seconds','source','createdAt'])
         && request.resource.data.ownerUid == request.auth.uid
+        && validCode(request.resource.data.studentCode)
+        && request.resource.data.sessionId is string
+        && exists(/databases/$(database)/documents/activeCodes/$(request.resource.data.studentCode))
+        && get(/databases/$(database)/documents/activeCodes/$(request.resource.data.studentCode)).data.ownerUid == request.auth.uid
+        && get(/databases/$(database)/documents/activeCodes/$(request.resource.data.studentCode)).data.sessionId == request.resource.data.sessionId
+        && get(/databases/$(database)/documents/activeCodes/$(request.resource.data.studentCode)).data.expiresAt > request.time
         && request.resource.data.block is int && request.resource.data.block >= 1 && request.resource.data.block <= 7
         && request.resource.data.mode in ['solo','guided']
         && request.resource.data.total is int && request.resource.data.total >= 1 && request.resource.data.total <= 80
@@ -25,7 +55,7 @@ service cloud.firestore {
         && request.resource.data.seconds is int && request.resource.data.seconds >= 0 && request.resource.data.seconds <= 86400
         && request.resource.data.source == 'student-auto'
         && request.resource.data.createdAt == request.time;
-      allow update, delete: if false;
+      allow update: if false;
     }
     match /{document=**} { allow read, write: if false; }
   }
